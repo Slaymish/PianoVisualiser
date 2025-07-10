@@ -59,3 +59,16 @@ double Piano::getFrequencyAt(int idx) const {
     return 0.0;
 }
 
+void Piano::setGeometry(int x, int y, int keyW, int keyH) {
+    for (size_t i = 0; i < keys.size(); ++i) {
+        keys[i].rect = { x + int(i) * keyW, y, keyW - 2, keyH };
+    }
+}
+
+void Piano::updateFrequencies(double step) {
+    const double base = 261.63;  // Middle C frequency
+    for (size_t i = 0; i < keys.size(); ++i) {
+        keys[i].frequency = base * std::pow(step, double(i));
+    }
+}
+

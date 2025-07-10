@@ -8,10 +8,12 @@
 #include <string>
 #include <numeric>
 #include <algorithm>
+#include <sstream>
+#include <iomanip>
 #include "piano.hpp"
 
-constexpr int SCREEN_WIDTH = 800;
-constexpr int SCREEN_HEIGHT = 600;
+constexpr int SCREEN_WIDTH = 1920;
+constexpr int SCREEN_HEIGHT = 1080;
 constexpr int SAMPLE_RATE = 48000;
 constexpr int AMPLITUDE = 28000;
 constexpr double DEFAULT_SEMITONE_RATIO = 1.0594630943592953;
@@ -25,7 +27,7 @@ double semitoneStep = DEFAULT_SEMITONE_RATIO;
 int hoveredKey = -1;
 bool draggingSlider = false;
 double viewScale = 1.0; // multiplier for viewing wave
-SDL_Rect sliderBar = {SCREEN_WIDTH - 220, 10, 200, 20};
+SDL_Rect sliderBar{0, 0, 0, 0};
 
 void audioCallback(void* userdata, Uint8* stream, int len) {
     (void)userdata;
@@ -76,7 +78,8 @@ int main(int /*argc*/, char* /*argv*/[]) {
     }
     SDL_Window* window = SDL_CreateWindow("Platonic Piano Visualiser",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        SCREEN_WIDTH, SCREEN_HEIGHT, 0);
+        SCREEN_WIDTH, SCREEN_HEIGHT,
+        SDL_WINDOW_RESIZABLE);
     if (!window) {
         std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << "\n";
         TTF_Quit(); SDL_Quit();
@@ -109,11 +112,44 @@ int main(int /*argc*/, char* /*argv*/[]) {
     }
     SDL_PauseAudio(0);
 
-    Piano piano(50, 400, 40, 150, 14, semitoneStep);
-    bool quit = false; SDL_Event e;
+    const int numKeys = 14;
+    int windowWidth = SCREEN_WIDTH, windowHeight = SCREEN_HEIGHT;
+    SDL_GetWindowSize(window, &windowWidth, &windowHeight);
+    int margin = std::max(10, int(std::min(windowWidth, windowHeight) * 0.02));
+    int fontHeight = TTF_FontHeight(font);
+    int lineSpacing = fontHeight + margin / 2;
+    int sliderWidth = windowWidth * 0.2;
+    int sliderHeight = margin;
+    sliderBar = { windowWidth - sliderWidth - margin, margin, sliderWidth, sliderHeight };
+    int textBlockHeight = 3 * lineSpacing;
+    int waveY = margin + textBlockHeight + margin;
+    int waveH = windowHeight * 0.1;
+    int pianoY = waveY + waveH + margin;
+    int pianoKeyH = windowHeight - pianoY - margin;
+    int pianoKeyW = (windowWidth - 2 * margin) / numKeys;
+    int pianoX = margin;
+    Piano piano(pianoX, pianoY, pianoKeyW, pianoKeyH, numKeys, semitoneStep);
+
+    bool quit = false;
+    SDL_Event e;
     double wavePhase = 0.0;
-    
+
     while (!quit) {
+        SDL_GetWindowSize(window, &windowWidth, &windowHeight);
+        margin = std::max(10, int(std::min(windowWidth, windowHeight) * 0.02));
+        fontHeight = TTF_FontHeight(font);
+        lineSpacing = fontHeight + margin / 2;
+        sliderWidth = windowWidth * 0.2;
+        sliderHeight = margin;
+        sliderBar = { windowWidth - sliderWidth - margin, margin, sliderWidth, sliderHeight };
+        textBlockHeight = 3 * lineSpacing;
+        waveY = margin + textBlockHeight + margin;
+        waveH = windowHeight * 0.1;
+        pianoY = waveY + waveH + margin;
+        pianoKeyH = windowHeight - pianoY - margin;
+        pianoKeyW = (windowWidth - 2 * margin) / numKeys;
+        pianoX = margin;
+        piano.setGeometry(pianoX, pianoY, pianoKeyW, pianoKeyH);
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) quit = true;
             else if (e.type == SDL_MOUSEBUTTONDOWN) {
@@ -135,9 +171,13 @@ int main(int /*argc*/, char* /*argv*/[]) {
                     viewScale = pct * 10.0; // 0 to 10x multiplier
                 }
             } else if (e.type == SDL_KEYDOWN) {
-                if (e.key.keysym.sym == SDLK_UP) semitoneStep *= 1.01;
-                else if (e.key.keysym.sym == SDLK_DOWN) semitoneStep /= 1.01;
-                piano = Piano(50, 400, 40, 150, 14, semitoneStep);
+                if (e.key.keysym.sym == SDLK_UP) {
+                    semitoneStep *= 1.01;
+                    piano.updateFrequencies(semitoneStep);
+                } else if (e.key.keysym.sym == SDLK_DOWN) {
+                    semitoneStep /= 1.01;
+                    piano.updateFrequencies(semitoneStep);
+                }
             }
         }
         {
@@ -150,8 +190,11 @@ int main(int /*argc*/, char* /*argv*/[]) {
         SDL_SetRenderDrawColor(renderer, 80, 80, 80, 255);
         SDL_RenderFillRect(renderer, &sliderBar);
         // render slider knob
-        int knobX = sliderBar.x + int((viewScale / 10.0) * sliderBar.w) - 5;
-        SDL_Rect knob = {knobX, sliderBar.y - 5, 10, sliderBar.h + 10};
+        int knobW = sliderBar.h;
+        int knobH = sliderBar.h * 2;
+        int knobX = sliderBar.x + int((viewScale / 10.0) * sliderBar.w) - knobW / 2;
+        int knobY = sliderBar.y - sliderBar.h / 2;
+        SDL_Rect knob{knobX, knobY, knobW, knobH};
         SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
         SDL_RenderFillRect(renderer, &knob);
         // calculate frequencies
@@ -163,12 +206,19 @@ int main(int /*argc*/, char* /*argv*/[]) {
             combinedFreq = std::sqrt(sumSquares / activeFrequencies.size());
         }
         double displayFreq = combinedFreq * (activeFrequencies.empty() ? 0.0 : viewScale);
-        // render frequency texts
-        renderText(renderer, font, "Combined Freq: " + std::to_string(int(combinedFreq)) + " Hz", 10, 10);
-        renderText(renderer, font, "Display Freq: " + std::to_string(int(displayFreq)) + " Hz", 10, 35);
+        {
+            std::vector<std::string> lines;
+            lines.emplace_back("Combined Freq: " + std::to_string(int(combinedFreq)) + " Hz");
+            lines.emplace_back("Display Freq: " + std::to_string(int(displayFreq)) + " Hz");
+            std::ostringstream ss;
+            ss << std::fixed << std::setprecision(2) << viewScale;
+            lines.emplace_back("Scale: x" + ss.str());
+            for (int i = 0; i < (int)lines.size(); ++i) {
+                renderText(renderer, font, lines[i], margin, margin + lineSpacing * i);
+            }
+        }
         // draw moving waveform above keys
-        int waveY = 100, waveH = 100;
-        for (int x = 0; x < SCREEN_WIDTH - 1; ++x) {
+        for (int x = 0; x < windowWidth - 1; ++x) {
             double t1 = wavePhase + 2 * M_PI * displayFreq * x / SAMPLE_RATE;
             double t2 = wavePhase + 2 * M_PI * displayFreq * (x + 1) / SAMPLE_RATE;
             int y1 = waveY + waveH / 2 + int(std::sin(t1) * waveH / 2);
@@ -176,12 +226,12 @@ int main(int /*argc*/, char* /*argv*/[]) {
             SDL_SetRenderDrawColor(renderer, 100, 255, 100, 255);
             SDL_RenderDrawLine(renderer, x, y1, x + 1, y2);
         }
-        wavePhase += 2 * M_PI * displayFreq / (SCREEN_WIDTH);
+        wavePhase += 2 * M_PI * displayFreq / windowWidth;
         piano.render(renderer);
-        // show hovered key freq
         if (hoveredKey >= 0) {
             double f = piano.getFrequencyAt(hoveredKey);
-            renderText(renderer, font, "Key freq: " + std::to_string(int(f)) + " Hz", 200, 10);
+            std::string keyLine = "Key freq: " + std::to_string(int(f)) + " Hz";
+            renderText(renderer, font, keyLine, margin, margin + lineSpacing * 3);
         }
         SDL_RenderPresent(renderer);
     }
